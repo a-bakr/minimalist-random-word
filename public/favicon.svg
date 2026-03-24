@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Background -->
+  <rect width="32" height="32" rx="7" fill="#18181b"/>
+
+  <!-- Letter W -->
+  <text
+    x="16"
+    y="22"
+    font-family="system-ui, -apple-system, sans-serif"
+    font-size="18"
+    font-weight="700"
+    fill="white"
+    text-anchor="middle"
+    letter-spacing="-1"
+  >W</text>
+
+  <!-- Three small dots suggesting randomness / ellipsis -->
+  <circle cx="9"  cy="27" r="1.2" fill="#71717a"/>
+  <circle cx="13" cy="27" r="1.2" fill="#71717a"/>
+  <circle cx="17" cy="27" r="1.2" fill="#71717a"/>
+</svg>

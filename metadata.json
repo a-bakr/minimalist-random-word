@@ -1,5 +1,5 @@
 {
-  "name": "Minimalist Random Word",
+  "name": "Random Word",
   "description": "A super minimalistic web app that generates a random English word when you tap anywhere on the screen. Features dark and light mode.",
   "requestFramePermissions": []
 }
