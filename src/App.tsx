@@ -127,8 +127,8 @@ function NumInput({
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [words, setWords] = useState<WordEntry[]>([]);
-  const [maxWords, setMaxWords] = useState(1);
-  const [fontSize, setFontSize] = useState(80);
+  const [maxWords, setMaxWords] = useState(() => Number(localStorage.getItem('maxWords')) || 1);
+  const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem('fontSize')) || 80);
   const [isDark, setIsDark] = useState(false);
   const [hasClicked, setHasClicked] = useState(false);
   const [isSoundEnabled, setIsSoundEnabled] = useState(true);
@@ -172,7 +172,7 @@ export default function App() {
           max={200}
           title="Font size (px)"
           width="3rem"
-          onCommit={setFontSize}
+          onCommit={n => { localStorage.setItem('fontSize', String(n)); setFontSize(n); }}
         />
         <NumInput
           value={maxWords}
@@ -180,7 +180,7 @@ export default function App() {
           max={10}
           title="Words on screen"
           width="2.5rem"
-          onCommit={n => { setMaxWords(n); setWords(prev => prev.slice(-n)); }}
+          onCommit={n => { localStorage.setItem('maxWords', String(n)); setMaxWords(n); setWords(prev => prev.slice(-n)); }}
         />
         <button
           onClick={e => { e.stopPropagation(); setIsSoundEnabled(v => !v); }}
