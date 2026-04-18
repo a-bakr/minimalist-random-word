@@ -2,7 +2,8 @@
 
 @custom-variant dark (&:is(.dark *));
 
-html, body {
+html,
+body {
   height: 100%;
   width: 100%;
   overflow: hidden;
@@ -39,4 +40,27 @@ input[type=number] {
 
 .scrollbar-none::-webkit-scrollbar {
   display: none;
+}
+
+/* Thin dark scrollbar for transcript card */
+.scrollbar-thin-dark {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(113, 113, 122, 0.4) transparent;
+}
+
+.scrollbar-thin-dark::-webkit-scrollbar {
+  width: 3px;
+}
+
+.scrollbar-thin-dark::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin-dark::-webkit-scrollbar-thumb {
+  background: rgba(113, 113, 122, 0.4);
+  border-radius: 9999px;
+}
+
+.scrollbar-thin-dark::-webkit-scrollbar-thumb:hover {
+  background: rgba(113, 113, 122, 0.7);
 }
