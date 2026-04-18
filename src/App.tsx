@@ -9,7 +9,7 @@ import { Moon, Sun, Volume2, VolumeX, RotateCcw, Mic, Play, Square, X } from 'lu
 import { motion, AnimatePresence } from 'motion/react';
 
 type WordEntry = { text: string; x: number; y: number; id: number; color: string };
-type Recording = { id: number; url: string; transcript: string };
+type Recording = { id: number; url: string; transcript: string; num: number };
 
 const getRandomColor = (isDark: boolean) =>
   `hsl(${Math.floor(Math.random() * 360)}, 70%, ${isDark ? 75 : 40}%)`;
@@ -299,6 +299,7 @@ export default function App() {
   const [liveText, setLiveText] = useState('');
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [playingId, setPlayingId] = useState<number | null>(null);
+  const [transcribingId, setTranscribingId] = useState<number | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recognitionRef = useRef<any>(null);
@@ -308,6 +309,9 @@ export default function App() {
   const pendingTranscriptRef = useRef('');
   const liveTextRef = useRef('');
   const playbacksRef = useRef<Map<number, HTMLAudioElement>>(new Map());
+  const recordingCountRef = useRef(0);
+
+  const isMobile = /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
   const handleDurationChange = (secs: number) => {
     setDuration(secs);
@@ -391,12 +395,41 @@ export default function App() {
       const audio = new Audio(url);
       audio.onended = () => setPlayingId(pid => (pid === id ? null : pid));
       playbacksRef.current.set(id, audio);
-      setRecordings(prev => [...prev, { id, url, transcript: pendingTranscriptRef.current }]);
+      recordingCountRef.current += 1;
+      const num = recordingCountRef.current;
+      setRecordings(prev => [...prev, { id, url, transcript: pendingTranscriptRef.current, num }]);
       stream.getTracks().forEach(t => t.stop());
+
+      // On mobile: send audio to Groq Whisper for transcript
+      if (isMobile) {
+        const groqKey = import.meta.env.VITE_GROQ_API_KEY;
+        if (groqKey && blob.size > 0) {
+          setTranscribingId(id);
+          const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'mp4' : 'webm';
+          const file = new File([blob], `recording.${ext}`, { type: mimeType });
+          const formData = new FormData();
+          formData.append('file', file);
+          formData.append('model', 'whisper-large-v3-turbo');
+          formData.append('response_format', 'json');
+          fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${groqKey}` },
+            body: formData,
+          })
+            .then(r => r.json())
+            .then(data => {
+              if (data.text) {
+                setRecordings(prev => prev.map(r => r.id === id ? { ...r, transcript: data.text } : r));
+              }
+            })
+            .catch(() => {})
+            .finally(() => setTranscribingId(tid => tid === id ? null : tid));
+        }
+      }
     };
     setTimeout(() => mediaRecorder.start(), 200);
 
-    const SR = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SR = !isMobile && ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
     if (SR) {
       const recognition = new SR();
       recognitionRef.current = recognition;
@@ -478,11 +511,11 @@ export default function App() {
     ].slice(-maxWords));
   };
 
-  const fiveWords = (text: string) => {
+  const threeWords = (text: string) => {
     if (!text) return '';
     const ws = text.trim().split(/\s+/).filter(Boolean);
-    if (ws.length <= 5) return text;
-    return ws.slice(0, 5).join(' ') + '\u2026';
+    if (ws.length <= 3) return text;
+    return ws.slice(0, 3).join(' ') + '\u2026';
   };
 
   return (
@@ -601,7 +634,9 @@ export default function App() {
                       : <Play size={14} strokeWidth={1.5} />}
                   </button>
                   <span className="text-xs text-zinc-500 dark:text-zinc-400 max-w-[8rem] truncate">
-                    {fiveWords(rec.transcript) || 'No speech'}
+                    {transcribingId === rec.id
+                      ? <span className="animate-pulse">…</span>
+                      : threeWords(rec.transcript) || String(rec.num)}
                   </span>
                   <button
                     onClick={removeRecording(rec.id)}
