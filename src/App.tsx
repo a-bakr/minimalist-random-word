@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { generate } from 'random-words';
 import { Moon, Sun, Volume2, VolumeX, RotateCcw, Mic, Play, Square, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -73,20 +73,16 @@ function Timer({
   duration,
   isRunning,
   onStop,
-  onMinute,
   onDurationChange,
-  resetSignal,
 }: {
   duration: number;
   isRunning: boolean;
   onStop: () => void;
-  onMinute?: () => void;
   onDurationChange: (secs: number) => void;
-  resetSignal?: number;
 }) {
   const [elapsed, setElapsed] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const firedMinuteRef = useRef(false);
+  const firedBeepRef = useRef(false);
 
   // Editing state for idle mode
   const [isEditing, setIsEditing] = useState(false);
@@ -95,36 +91,27 @@ function Timer({
   // Keep draft in sync with prop
   useEffect(() => { setDraftSecs(String(duration)); }, [duration]);
 
-  // Reset elapsed when resetSignal changes (auto-word restart).
-  const isFirstResetRef = useRef(true);
-  useEffect(() => {
-    if (isFirstResetRef.current) { isFirstResetRef.current = false; return; }
-    setElapsed(0);
-    firedMinuteRef.current = false;
-  }, [resetSignal]);
-
   useEffect(() => {
     if (isRunning) {
-      firedMinuteRef.current = false;
+      firedBeepRef.current = false;
       intervalRef.current = setInterval(() => {
         setElapsed(e => e + 1);
       }, 1000);
     } else {
       if (intervalRef.current) clearInterval(intervalRef.current);
       setElapsed(0);
-      firedMinuteRef.current = false;
+      firedBeepRef.current = false;
     }
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [isRunning]);
 
   useEffect(() => {
     if (!isRunning) return;
-    if (elapsed === duration && !firedMinuteRef.current) {
-      firedMinuteRef.current = true;
+    if (elapsed === duration && !firedBeepRef.current) {
+      firedBeepRef.current = true;
       playBeepSound();
-      onMinute?.();
     }
-  }, [elapsed, isRunning, duration, onMinute]);
+  }, [elapsed, isRunning, duration]);
 
   const remaining = duration - elapsed;
   const isOvertime = elapsed >= duration;
@@ -306,7 +293,6 @@ export default function App() {
   const [duration, setDuration] = useState(() => Number(localStorage.getItem('timerDuration')) || 60);
   const [timerEnabled, setTimerEnabled] = useState(() => localStorage.getItem('timerEnabled') !== 'false');
   const [isTimerRunning, setIsTimerRunning] = useState(false);
-  const [timerKey, setTimerKey] = useState(0);
 
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -322,25 +308,6 @@ export default function App() {
   const pendingTranscriptRef = useRef('');
   const liveTextRef = useRef('');
   const playbacksRef = useRef<Map<number, HTMLAudioElement>>(new Map());
-
-  // Stable refs so the timer-minute callback never goes stale
-  const isDarkRef = useRef(isDark);
-  isDarkRef.current = isDark;
-  const maxWordsRef = useRef(maxWords);
-  maxWordsRef.current = maxWords;
-  const isSoundEnabledRef = useRef(isSoundEnabled);
-  isSoundEnabledRef.current = isSoundEnabled;
-
-  const handleTimerMinute = useCallback(() => {
-    const x = Math.random() * (window.innerWidth * 0.8) + window.innerWidth * 0.1;
-    const y = Math.random() * (window.innerHeight * 0.8) + window.innerHeight * 0.1;
-    setWords(prev => [
-      ...prev,
-      { text: generate() as string, x, y, id: Date.now(), color: getRandomColor(isDarkRef.current) },
-    ].slice(-maxWordsRef.current));
-    if (isSoundEnabledRef.current) playPopSound();
-    setTimerKey(k => k + 1);
-  }, []);
 
   const handleDurationChange = (secs: number) => {
     setDuration(secs);
@@ -458,7 +425,7 @@ export default function App() {
           isRecordingRef.current = false;
           setIsRecording(false);
         }
-        // For 'network', 'aborted', 'audio-capture' etc., let onend handle the restart
+        // Ignore other errors (network, aborted, etc.) — don't restart to avoid browser chimes
       };
 
       recognition.onend = () => {
@@ -466,14 +433,7 @@ export default function App() {
           accumulatedFinalRef.current = (accumulatedFinalRef.current + ' ' + recognition._sessionFinal).trim();
           recognition._sessionFinal = '';
         }
-        if (isRecordingRef.current) {
-          // Small delay helps avoid rapid-restart failures on Android Chrome
-          setTimeout(() => {
-            if (isRecordingRef.current) {
-              try { recognition.start(); } catch { /* already starting */ }
-            }
-          }, 150);
-        }
+        // Do NOT restart — each restart causes Chrome to play its start chime mid-recording
       };
 
       recognition.start();
@@ -494,7 +454,7 @@ export default function App() {
     pendingTranscriptRef.current = refsSnapshot || liveTextRef.current;
 
     mediaRecorderRef.current?.stop();
-    try { rec?.stop(); } catch { /* already stopped */ }
+    try { rec?.abort(); } catch { /* already stopped */ }
   };
 
   useEffect(() => {
@@ -540,19 +500,16 @@ export default function App() {
             aria-label={timerEnabled ? 'Disable timer' : 'Enable timer'}
           >
             <div
-              className={`w-2 h-2 rounded-full transition-all duration-500 ${
-                timerEnabled
+              className={`w-2 h-2 rounded-full transition-all duration-500 ${timerEnabled
                   ? 'bg-zinc-400/50 dark:bg-zinc-500/50 group-hover:bg-zinc-600 dark:group-hover:bg-zinc-300'
                   : 'bg-zinc-400/10 dark:bg-zinc-600/10 group-hover:bg-zinc-400/30 dark:group-hover:bg-zinc-500/30'
-              }`}
+                }`}
             />
           </button>
           <Timer
-            resetSignal={timerKey}
             duration={duration}
             isRunning={isTimerRunning}
             onStop={() => setIsTimerRunning(false)}
-            onMinute={handleTimerMinute}
             onDurationChange={handleDurationChange}
           />
         </div>
