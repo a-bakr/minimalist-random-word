@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { generate } from 'random-words';
-import { Moon, Sun, Volume2, VolumeX, RotateCcw } from 'lucide-react';
+import { Moon, Sun, Volume2, VolumeX, RotateCcw, Mic, Play, Square, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 type WordEntry = { text: string; x: number; y: number; id: number; color: string };
@@ -122,8 +122,8 @@ function Timer({ isRunning, onReset }: { isRunning: boolean; onReset: () => void
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         className={`text-2xl font-black font-mono tabular-nums tracking-tight cursor-pointer transition-colors duration-500 ${isOvertime
-            ? 'text-amber-400/80 dark:text-amber-300/80'
-            : 'text-zinc-400/70 dark:text-zinc-500/70'
+          ? 'text-amber-400/80 dark:text-amber-300/80'
+          : 'text-zinc-400/70 dark:text-zinc-500/70'
           }`}
       >
         {display()}
@@ -216,10 +216,10 @@ function NumInput({
         if (e.key === 'Escape') { setDraft(String(value)); (e.target as HTMLInputElement).blur(); }
       }}
       onClick={e => e.stopPropagation()}
-      className="bg-transparent border-none outline-none text-center text-sm font-mono
-        text-zinc-400/30 hover:text-zinc-500/40 focus:text-zinc-900
-        dark:focus:text-zinc-50 transition-colors duration-300 cursor-pointer
-        focus:cursor-text p-3 rounded-full"
+      className="bg-transparent border-none outline-none text-center text-2xl font-black font-mono tabular-nums tracking-tight
+        text-zinc-400/15 hover:text-zinc-900 dark:hover:text-zinc-50 focus:text-zinc-900
+        dark:focus:text-zinc-50 transition-all duration-500 cursor-pointer
+        focus:cursor-text px-2 py-1 rounded-full"
     />
   );
 }
@@ -233,17 +233,158 @@ export default function App() {
   const [hasClicked, setHasClicked] = useState(false);
   const [isSoundEnabled, setIsSoundEnabled] = useState(true);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [transcript, setTranscript] = useState('');
+  const [liveText, setLiveText] = useState('');
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [showPanel, setShowPanel] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioUrlRef = useRef<string | null>(null);
+  const isRecordingRef = useRef(false);
+  // Accumulates finalized text across SpeechRecognition sessions
+  // (Chrome auto-stops recognition on silence and restarts it, resetting event.results)
+  const accumulatedFinalRef = useRef('');
+  // Snapshot of text captured at stop time, used by onstop to avoid race with onend
+  const pendingTranscriptRef = useRef('');
+  const playbackRef = useRef<HTMLAudioElement | null>(null);
+
+  // Set up audio element when URL changes
+  useEffect(() => {
+    if (!audioUrl) { playbackRef.current = null; return; }
+    const audio = new Audio(audioUrl);
+    audio.onended = () => setIsPlaying(false);
+    playbackRef.current = audio;
+    return () => { audio.pause(); audio.onended = null; };
+  }, [audioUrl]);
+
+  const togglePlayback = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!playbackRef.current) return;
+    if (isPlaying) {
+      playbackRef.current.pause();
+      playbackRef.current.currentTime = 0;
+      setIsPlaying(false);
+    } else {
+      playbackRef.current.play();
+      setIsPlaying(true);
+    }
+  };
+
+  const closePanel = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (playbackRef.current) { playbackRef.current.pause(); playbackRef.current = null; }
+    setIsPlaying(false);
+    setShowPanel(false);
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+    audioUrlRef.current = null;
+    setAudioUrl(null);
+    setTranscript('');
+  };
+
+  const startRecording = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      // Mic permission denied or not available — silently do nothing
+      return;
+    }
+
+    audioChunksRef.current = [];
+    accumulatedFinalRef.current = '';
+    setTranscript('');
+    setLiveText('');
+
+    // ── MediaRecorder: captures audio for playback ──
+    const mediaRecorder = new MediaRecorder(stream);
+    mediaRecorderRef.current = mediaRecorder;
+
+    mediaRecorder.ondataavailable = ev => {
+      if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
+    };
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+      const url = URL.createObjectURL(blob);
+      audioUrlRef.current = url;
+      setAudioUrl(url);
+      // Use the snapshot captured at stop time to avoid race with recognition.onend
+      setTranscript(pendingTranscriptRef.current);
+      setShowPanel(true);
+      stream.getTracks().forEach(t => t.stop());
+    };
+    // Delay start so the mic doesn't capture the tap/click sound
+    setTimeout(() => mediaRecorder.start(), 200);
+
+    // ── SpeechRecognition: live speech-to-text ──
+    const SR = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SR) {
+      const recognition = new SR();
+      recognitionRef.current = recognition;
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+
+      recognition.onresult = (event: any) => {
+        // event.results only contains results from the current session.
+        // We prefix with accumulatedFinalRef to keep text from previous sessions.
+        let sessionFinal = '';
+        let interim = '';
+        for (let i = 0; i < event.results.length; i++) {
+          const text = event.results[i][0].transcript;
+          if (event.results[i].isFinal) sessionFinal += text + ' ';
+          else interim += text;
+        }
+        const fullFinal = (accumulatedFinalRef.current + ' ' + sessionFinal).trim();
+        const display = interim ? fullFinal + ' ' + interim : fullFinal;
+        setLiveText(display.trim());
+        // Keep sessionFinal in ref so onend can persist it before restart
+        recognition._sessionFinal = sessionFinal.trim();
+      };
+
+      recognition.onend = () => {
+        // Save this session's finals before potentially restarting
+        if (recognition._sessionFinal) {
+          accumulatedFinalRef.current = (accumulatedFinalRef.current + ' ' + recognition._sessionFinal).trim();
+          recognition._sessionFinal = '';
+        }
+        if (isRecordingRef.current) {
+          try { recognition.start(); } catch { /* already starting */ }
+        }
+      };
+
+      recognition.start();
+    }
+
+    isRecordingRef.current = true;
+    setIsRecording(true);
+  };
+
+  const stopRecording = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    isRecordingRef.current = false;
+    setIsRecording(false);
+    setLiveText('');
+
+    // Snapshot all text we have right now (accumulated finals + current session finals)
+    // before stopping, so onstop doesn't race with recognition.onend
+    const rec = recognitionRef.current;
+    const sessionFinal = rec?._sessionFinal || '';
+    pendingTranscriptRef.current = (accumulatedFinalRef.current + ' ' + sessionFinal).trim();
+
+    mediaRecorderRef.current?.stop();
+    try { rec?.stop(); } catch { /* already stopped */ }
+  };
 
   useEffect(() => {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     setIsDark(prefersDark);
-    setWords([{
-      text: generate() as string,
-      x: window.innerWidth / 2,
-      y: window.innerHeight / 2,
-      id: Date.now(),
-      color: getRandomColor(prefersDark),
-    }]);
   }, []);
 
   useEffect(() => {
@@ -310,15 +451,86 @@ export default function App() {
       {/* Timer */}
       <Timer isRunning={isTimerRunning} onReset={() => setIsTimerRunning(false)} />
 
-      {/* Hint */}
+      {/* Live transcript — centered bottom, visible while recording */}
+      <AnimatePresence>
+        {isRecording && liveText && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, filter: 'blur(4px)' }}
+            transition={{ duration: 0.4 }}
+            className="absolute bottom-14 left-1/2 -translate-x-1/2 max-w-lg text-center text-sm text-zinc-400/50 dark:text-zinc-500/40 select-none pointer-events-none px-8"
+          >
+            {liveText}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Recording area — unified bottom-right */}
+      <div className="absolute bottom-6 right-6 z-20 flex items-center gap-3" onClick={e => e.stopPropagation()}>
+        {/* Review pill — slides in when panel is visible */}
+        <AnimatePresence>
+          {showPanel && !isRecording && (
+            <motion.div
+              className="flex items-center gap-3 px-4 py-2.5 rounded-full bg-zinc-100/80 dark:bg-zinc-900/80 backdrop-blur-md"
+              initial={{ opacity: 0, x: 20, filter: 'blur(8px)' }}
+              animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, x: 20, filter: 'blur(8px)' }}
+              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <button
+                onClick={togglePlayback}
+                className="text-zinc-400/50 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors duration-500"
+                aria-label={isPlaying ? 'Stop playback' : 'Play recording'}
+              >
+                {isPlaying ? <Square size={16} strokeWidth={1.5} /> : <Play size={16} strokeWidth={1.5} />}
+              </button>
+              <p className="max-w-xs text-xs leading-relaxed text-zinc-500 dark:text-zinc-400 truncate">
+                {transcript || 'No speech detected'}
+              </p>
+              <button
+                onClick={closePanel}
+                className="text-zinc-400/30 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors duration-500"
+                aria-label="Close"
+              >
+                <X size={14} strokeWidth={1.5} />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Mic / Stop button — always visible */}
+        <button
+          onClick={isRecording ? stopRecording : startRecording}
+          className={`rounded-full p-3 transition-all duration-500 ${isRecording
+              ? 'text-zinc-900 dark:text-zinc-50'
+              : 'text-zinc-400/30 hover:text-zinc-900 dark:hover:text-zinc-50'
+            }`}
+          aria-label={isRecording ? 'Stop recording' : 'Start recording'}
+        >
+          <span className="relative flex">
+            {isRecording && (
+              <span className="absolute inset-0 rounded-full bg-red-400/40 dark:bg-red-400/30 animate-ping" />
+            )}
+            {isRecording ? <Square size={20} strokeWidth={1.5} /> : <Mic size={20} strokeWidth={1.5} />}
+          </span>
+        </button>
+      </div>
+
+      {/* Hint — centered, replaces the initial word */}
       <AnimatePresence>
         {!hasClicked && (
           <motion.div
-            exit={{ opacity: 0, y: 10, filter: 'blur(5px)' }}
-            transition={{ duration: 0.5 }}
-            className="absolute bottom-8 left-1/2 -translate-x-1/2 text-xs md:text-sm text-zinc-400/50 dark:text-zinc-600/50 tracking-[0.5em] uppercase select-none pointer-events-none"
+            className="absolute inset-0 flex items-center justify-center pointer-events-none select-none"
+            exit={{ opacity: 0, filter: 'blur(16px)', scale: 1.05 }}
+            transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
           >
-            Tap anywhere
+            <h1
+              className="leading-none font-medium tracking-tight text-center capitalize"
+              style={{ fontSize: `${fontSize}px`, color: `hsl(0, 0%, ${isDark ? 30 : 75}%)` }}
+            >
+              tap me
+            </h1>
           </motion.div>
         )}
       </AnimatePresence>
