@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { generate } from 'random-words';
-import { Moon, Sun, Volume2, VolumeX, RotateCcw, Mic, Play, Square, X } from 'lucide-react';
+import { Moon, Sun, Volume2, VolumeX, RotateCcw, Mic, Play, Square, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 type WordEntry = { text: string; x: number; y: number; id: number; color: string };
@@ -106,7 +106,7 @@ function Timer({ isRunning, onReset }: { isRunning: boolean; onReset: () => void
 
   if (!isRunning && elapsed === 0) {
     return (
-      <div className="absolute top-6 left-6 z-10 text-2xl font-black font-mono tabular-nums text-zinc-400/15 dark:text-zinc-600/15 select-none pointer-events-none tracking-tight">
+      <div className="text-2xl font-black font-mono tabular-nums text-zinc-400/15 dark:text-zinc-600/15 select-none pointer-events-none tracking-tight">
         1:00
       </div>
     );
@@ -114,7 +114,7 @@ function Timer({ isRunning, onReset }: { isRunning: boolean; onReset: () => void
 
   return (
     <div
-      className="absolute top-6 left-6 z-10 flex items-center gap-2"
+      className="flex items-center gap-2"
       onClick={e => { e.stopPropagation(); onReset(); }}
     >
       <motion.span
@@ -250,6 +250,7 @@ export default function App() {
   const accumulatedFinalRef = useRef('');
   // Snapshot of text captured at stop time, used by onstop to avoid race with onend
   const pendingTranscriptRef = useRef('');
+  const liveTextRef = useRef('');
   const playbackRef = useRef<HTMLAudioElement | null>(null);
 
   // Set up audio element when URL changes
@@ -298,7 +299,7 @@ export default function App() {
 
     audioChunksRef.current = [];
     accumulatedFinalRef.current = '';
-    setTranscript('');
+    liveTextRef.current = '';
     setLiveText('');
 
     // ── MediaRecorder: captures audio for playback ──
@@ -343,6 +344,7 @@ export default function App() {
         }
         const fullFinal = (accumulatedFinalRef.current + ' ' + sessionFinal).trim();
         const display = interim ? fullFinal + ' ' + interim : fullFinal;
+        liveTextRef.current = display.trim();
         setLiveText(display.trim());
         // Keep sessionFinal in ref so onend can persist it before restart
         recognition._sessionFinal = sessionFinal.trim();
@@ -376,7 +378,9 @@ export default function App() {
     // before stopping, so onstop doesn't race with recognition.onend
     const rec = recognitionRef.current;
     const sessionFinal = rec?._sessionFinal || '';
-    pendingTranscriptRef.current = (accumulatedFinalRef.current + ' ' + sessionFinal).trim();
+    const refsSnapshot = (accumulatedFinalRef.current + ' ' + sessionFinal).trim();
+    // Fall back to liveText (which includes interim results) if refs are empty
+    pendingTranscriptRef.current = refsSnapshot || liveTextRef.current;
 
     mediaRecorderRef.current?.stop();
     try { rec?.stop(); } catch { /* already stopped */ }
@@ -407,38 +411,43 @@ export default function App() {
       className="relative h-screen w-screen cursor-pointer overflow-hidden bg-zinc-50 dark:bg-zinc-950 transition-colors duration-700"
       onClick={handleScreenClick}
     >
-      {/* Controls */}
-      <div className="absolute right-6 top-6 z-10 flex items-center">
-        <NumInput
-          value={fontSize}
-          min={12}
-          max={200}
-          title="Font size (px)"
-          width="3rem"
-          onCommit={n => { localStorage.setItem('fontSize', String(n)); setFontSize(n); }}
-        />
-        <NumInput
-          value={maxWords}
-          min={1}
-          max={10}
-          title="Words on screen"
-          width="2.5rem"
-          onCommit={n => { localStorage.setItem('maxWords', String(n)); setMaxWords(n); setWords(prev => prev.slice(-n)); }}
-        />
-        <button
-          onClick={e => { e.stopPropagation(); setIsSoundEnabled(v => !v); }}
-          className="rounded-full p-3 text-zinc-400/30 hover:text-zinc-900 dark:hover:text-zinc-50 transition-all duration-500"
-          aria-label={isSoundEnabled ? 'Mute sound' : 'Enable sound'}
-        >
-          {isSoundEnabled ? <Volume2 size={20} strokeWidth={1.5} /> : <VolumeX size={20} strokeWidth={1.5} />}
-        </button>
-        <button
-          onClick={e => { e.stopPropagation(); setIsDark(v => !v); }}
-          className="rounded-full p-3 text-zinc-400/30 hover:text-zinc-900 dark:hover:text-zinc-50 transition-all duration-500"
-          aria-label="Toggle theme"
-        >
-          {isDark ? <Sun size={20} strokeWidth={1.5} /> : <Moon size={20} strokeWidth={1.5} />}
-        </button>
+      {/* Top bar — timer left, controls right, same alignment */}
+      <div className="absolute top-6 inset-x-6 z-10 flex items-center justify-between pointer-events-none">
+        <div className="pointer-events-auto">
+          <Timer isRunning={isTimerRunning} onReset={() => setIsTimerRunning(false)} />
+        </div>
+        <div className="flex items-center pointer-events-auto">
+          <NumInput
+            value={fontSize}
+            min={12}
+            max={200}
+            title="Font size (px)"
+            width="3rem"
+            onCommit={n => { localStorage.setItem('fontSize', String(n)); setFontSize(n); }}
+          />
+          <NumInput
+            value={maxWords}
+            min={1}
+            max={10}
+            title="Words on screen"
+            width="2.5rem"
+            onCommit={n => { localStorage.setItem('maxWords', String(n)); setMaxWords(n); setWords(prev => prev.slice(-n)); }}
+          />
+          <button
+            onClick={e => { e.stopPropagation(); setIsSoundEnabled(v => !v); }}
+            className="rounded-full p-3 text-zinc-400/30 hover:text-zinc-900 dark:hover:text-zinc-50 transition-all duration-500"
+            aria-label={isSoundEnabled ? 'Mute sound' : 'Enable sound'}
+          >
+            {isSoundEnabled ? <Volume2 size={20} strokeWidth={1.5} /> : <VolumeX size={20} strokeWidth={1.5} />}
+          </button>
+          <button
+            onClick={e => { e.stopPropagation(); setIsDark(v => !v); }}
+            className="rounded-full p-3 text-zinc-400/30 hover:text-zinc-900 dark:hover:text-zinc-50 transition-all duration-500"
+            aria-label="Toggle theme"
+          >
+            {isDark ? <Sun size={20} strokeWidth={1.5} /> : <Moon size={20} strokeWidth={1.5} />}
+          </button>
+        </div>
       </div>
 
       {/* Words */}
@@ -448,9 +457,6 @@ export default function App() {
         ))}
       </AnimatePresence>
 
-      {/* Timer */}
-      <Timer isRunning={isTimerRunning} onReset={() => setIsTimerRunning(false)} />
-
       {/* Live transcript — centered bottom, visible while recording */}
       <AnimatePresence>
         {isRecording && liveText && (
@@ -459,7 +465,7 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0, filter: 'blur(4px)' }}
             transition={{ duration: 0.4 }}
-            className="absolute bottom-14 left-1/2 -translate-x-1/2 max-w-lg text-center text-sm text-zinc-400/50 dark:text-zinc-500/40 select-none pointer-events-none px-8"
+            className="absolute bottom-20 left-1/2 -translate-x-1/2 max-w-lg text-center text-base text-zinc-400/70 dark:text-zinc-500/60 select-none pointer-events-none px-8"
           >
             {liveText}
           </motion.div>
@@ -470,7 +476,7 @@ export default function App() {
       <div className="absolute bottom-6 right-6 z-20 flex items-center gap-3" onClick={e => e.stopPropagation()}>
         {/* Review pill — slides in when panel is visible */}
         <AnimatePresence>
-          {showPanel && !isRecording && (
+          {showPanel && (
             <motion.div
               className="flex items-center gap-3 px-4 py-2.5 rounded-full bg-zinc-100/80 dark:bg-zinc-900/80 backdrop-blur-md"
               initial={{ opacity: 0, x: 20, filter: 'blur(8px)' }}
@@ -491,9 +497,9 @@ export default function App() {
               <button
                 onClick={closePanel}
                 className="text-zinc-400/30 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors duration-500"
-                aria-label="Close"
+                aria-label="Clear transcript"
               >
-                <X size={14} strokeWidth={1.5} />
+                <Trash2 size={14} strokeWidth={1.5} />
               </button>
             </motion.div>
           )}
