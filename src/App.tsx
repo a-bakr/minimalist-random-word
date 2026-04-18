@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { generate } from 'random-words';
-import { Moon, Sun, Volume2, VolumeX, RotateCcw, Mic, Play, Square, Trash2 } from 'lucide-react';
+import { Moon, Sun, Volume2, VolumeX, RotateCcw, Mic, Play, Square, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 type WordEntry = { text: string; x: number; y: number; id: number; color: string };
+type Recording = { id: number; url: string; transcript: string };
 
 const getRandomColor = (isDark: boolean) =>
   `hsl(${Math.floor(Math.random() * 360)}, 70%, ${isDark ? 75 : 40}%)`;
@@ -43,7 +44,6 @@ const playBeepSound = () => {
   }
   if (audioCtx.state === 'suspended') audioCtx.resume();
 
-  // Two-tone beep: 440Hz then 554Hz, distinct from pop sounds
   [440, 554].forEach((freq, i) => {
     const osc = audioCtx!.createOscillator();
     const gainNode = audioCtx!.createGain();
@@ -60,62 +60,133 @@ const playBeepSound = () => {
   });
 };
 
-// ─── Timer ────────────────────────────────────────────────────────────────────
-const DURATION = 60; // seconds
+// Format seconds → "M:SS"
+const fmtDuration = (secs: number) => {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+};
 
-function Timer({ isRunning, onReset }: { isRunning: boolean; onReset: () => void }) {
+// ─── Timer ────────────────────────────────────────────────────────────────────
+
+function Timer({
+  duration,
+  isRunning,
+  onStop,
+  onMinute,
+  onDurationChange,
+  resetSignal,
+}: {
+  duration: number;
+  isRunning: boolean;
+  onStop: () => void;
+  onMinute?: () => void;
+  onDurationChange: (secs: number) => void;
+  resetSignal?: number;
+}) {
   const [elapsed, setElapsed] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const prevElapsedRef = useRef(0);
+  const firedMinuteRef = useRef(false);
+
+  // Editing state for idle mode
+  const [isEditing, setIsEditing] = useState(false);
+  const [draftSecs, setDraftSecs] = useState(String(duration));
+
+  // Keep draft in sync with prop
+  useEffect(() => { setDraftSecs(String(duration)); }, [duration]);
+
+  // Reset elapsed when resetSignal changes (auto-word restart).
+  const isFirstResetRef = useRef(true);
+  useEffect(() => {
+    if (isFirstResetRef.current) { isFirstResetRef.current = false; return; }
+    setElapsed(0);
+    firedMinuteRef.current = false;
+  }, [resetSignal]);
 
   useEffect(() => {
     if (isRunning) {
+      firedMinuteRef.current = false;
       intervalRef.current = setInterval(() => {
         setElapsed(e => e + 1);
       }, 1000);
     } else {
       if (intervalRef.current) clearInterval(intervalRef.current);
       setElapsed(0);
-      prevElapsedRef.current = 0;
+      firedMinuteRef.current = false;
     }
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [isRunning]);
 
-  // Beep at 60s, then every 30s after
   useEffect(() => {
     if (!isRunning) return;
-    const prev = prevElapsedRef.current;
-    prevElapsedRef.current = elapsed;
-    if (elapsed === DURATION) {
+    if (elapsed === duration && !firedMinuteRef.current) {
+      firedMinuteRef.current = true;
       playBeepSound();
-    } else if (elapsed > DURATION && (elapsed - DURATION) % 30 === 0 && elapsed !== prev) {
-      playBeepSound();
+      onMinute?.();
     }
-  }, [elapsed, isRunning]);
+  }, [elapsed, isRunning, duration, onMinute]);
 
-  const remaining = DURATION - elapsed;
-  const isOvertime = elapsed >= DURATION;
+  const remaining = duration - elapsed;
+  const isOvertime = elapsed >= duration;
 
   const display = () => {
-    const secs = isOvertime ? elapsed - DURATION : Math.abs(remaining);
+    const secs = isOvertime ? elapsed - duration : Math.abs(remaining);
     const m = Math.floor(secs / 60);
     const s = secs % 60;
     const formatted = `${m}:${String(s).padStart(2, '0')}`;
     return isOvertime ? `+${formatted}` : formatted;
   };
 
+  const commitDuration = () => {
+    const n = parseInt(draftSecs, 10);
+    if (!isNaN(n) && n >= 10 && n <= 600) {
+      onDurationChange(n);
+    } else {
+      setDraftSecs(String(duration));
+    }
+    setIsEditing(false);
+  };
+
+  // ── Idle state ──
   if (!isRunning && elapsed === 0) {
+    if (isEditing) {
+      return (
+        <input
+          autoFocus
+          type="number"
+          min={10}
+          max={600}
+          value={draftSecs}
+          onChange={e => setDraftSecs(e.target.value)}
+          onBlur={commitDuration}
+          onKeyDown={e => {
+            e.stopPropagation();
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+            if (e.key === 'Escape') { setDraftSecs(String(duration)); setIsEditing(false); }
+          }}
+          onClick={e => e.stopPropagation()}
+          className="bg-transparent border-none outline-none text-center text-2xl font-black font-mono tabular-nums tracking-tight
+            text-zinc-900 dark:text-zinc-50 transition-all duration-300 cursor-text w-16"
+        />
+      );
+    }
+
     return (
-      <div className="text-2xl font-black font-mono tabular-nums text-zinc-400/15 dark:text-zinc-600/15 select-none pointer-events-none tracking-tight">
-        1:00
+      <div
+        onClick={e => { e.stopPropagation(); setIsEditing(true); }}
+        className="text-2xl font-black font-mono tabular-nums tracking-tight cursor-pointer select-none
+          text-zinc-400/15 dark:text-zinc-600/15 hover:text-zinc-400/40 dark:hover:text-zinc-500/40 transition-colors duration-500"
+      >
+        {fmtDuration(duration)}
       </div>
     );
   }
 
+  // ── Running / overtime state ──
   return (
     <div
       className="flex items-center gap-2"
-      onClick={e => { e.stopPropagation(); onReset(); }}
+      onClick={e => { e.stopPropagation(); onStop(); }}
     >
       <motion.span
         key={isOvertime ? 'over' : 'count'}
@@ -138,7 +209,6 @@ function Timer({ isRunning, onReset }: { isRunning: boolean; onReset: () => void
 }
 
 // ─── WordItem ─────────────────────────────────────────────────────────────────
-// Corrects position after mount so the word never overflows the viewport.
 function WordItem({ word, fontSize }: { word: WordEntry; fontSize: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x: word.x, y: word.y });
@@ -178,7 +248,6 @@ function WordItem({ word, fontSize }: { word: WordEntry; fontSize: number }) {
 }
 
 // ─── NumInput ─────────────────────────────────────────────────────────────────
-// A bare number input that looks like plain text until focused.
 function NumInput({
   value, min, max, title, width,
   onCommit,
@@ -232,59 +301,99 @@ export default function App() {
   const [isDark, setIsDark] = useState(false);
   const [hasClicked, setHasClicked] = useState(false);
   const [isSoundEnabled, setIsSoundEnabled] = useState(true);
+
+  // Timer state
+  const [duration, setDuration] = useState(() => Number(localStorage.getItem('timerDuration')) || 60);
+  const [timerEnabled, setTimerEnabled] = useState(() => localStorage.getItem('timerEnabled') !== 'false');
   const [isTimerRunning, setIsTimerRunning] = useState(false);
+  const [timerKey, setTimerKey] = useState(0);
+
+  // Recording state
   const [isRecording, setIsRecording] = useState(false);
-  const [transcript, setTranscript] = useState('');
   const [liveText, setLiveText] = useState('');
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [showPanel, setShowPanel] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [recordings, setRecordings] = useState<Recording[]>([]);
+  const [playingId, setPlayingId] = useState<number | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recognitionRef = useRef<any>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const audioUrlRef = useRef<string | null>(null);
   const isRecordingRef = useRef(false);
-  // Accumulates finalized text across SpeechRecognition sessions
-  // (Chrome auto-stops recognition on silence and restarts it, resetting event.results)
   const accumulatedFinalRef = useRef('');
-  // Snapshot of text captured at stop time, used by onstop to avoid race with onend
   const pendingTranscriptRef = useRef('');
   const liveTextRef = useRef('');
-  const playbackRef = useRef<HTMLAudioElement | null>(null);
+  const playbacksRef = useRef<Map<number, HTMLAudioElement>>(new Map());
 
-  // Set up audio element when URL changes
+  // Stable refs so the timer-minute callback never goes stale
+  const isDarkRef = useRef(isDark);
+  isDarkRef.current = isDark;
+  const maxWordsRef = useRef(maxWords);
+  maxWordsRef.current = maxWords;
+  const isSoundEnabledRef = useRef(isSoundEnabled);
+  isSoundEnabledRef.current = isSoundEnabled;
+
+  const handleTimerMinute = useCallback(() => {
+    const x = Math.random() * (window.innerWidth * 0.8) + window.innerWidth * 0.1;
+    const y = Math.random() * (window.innerHeight * 0.8) + window.innerHeight * 0.1;
+    setWords(prev => [
+      ...prev,
+      { text: generate() as string, x, y, id: Date.now(), color: getRandomColor(isDarkRef.current) },
+    ].slice(-maxWordsRef.current));
+    if (isSoundEnabledRef.current) playPopSound();
+    setTimerKey(k => k + 1);
+  }, []);
+
+  const handleDurationChange = (secs: number) => {
+    setDuration(secs);
+    localStorage.setItem('timerDuration', String(secs));
+  };
+
+  const toggleTimerEnabled = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setTimerEnabled(v => {
+      const next = !v;
+      localStorage.setItem('timerEnabled', String(next));
+      if (!next && isTimerRunning) setIsTimerRunning(false);
+      return next;
+    });
+  };
+
+  const togglePlayback = (id: number) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const audio = playbacksRef.current.get(id);
+    if (!audio) return;
+    setPlayingId(current => {
+      if (current === id) {
+        audio.pause();
+        audio.currentTime = 0;
+        return null;
+      }
+      if (current !== null) {
+        const cur = playbacksRef.current.get(current);
+        if (cur) { cur.pause(); cur.currentTime = 0; }
+      }
+      audio.play();
+      return id;
+    });
+  };
+
+  const removeRecording = (id: number) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const audio = playbacksRef.current.get(id);
+    if (audio) { audio.pause(); audio.onended = null; }
+    playbacksRef.current.delete(id);
+    setPlayingId(current => (current === id ? null : current));
+    setRecordings(prev => {
+      const rec = prev.find(r => r.id === id);
+      if (rec) URL.revokeObjectURL(rec.url);
+      return prev.filter(r => r.id !== id);
+    });
+  };
+
   useEffect(() => {
-    if (!audioUrl) { playbackRef.current = null; return; }
-    const audio = new Audio(audioUrl);
-    audio.onended = () => setIsPlaying(false);
-    playbackRef.current = audio;
-    return () => { audio.pause(); audio.onended = null; };
-  }, [audioUrl]);
-
-  const togglePlayback = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!playbackRef.current) return;
-    if (isPlaying) {
-      playbackRef.current.pause();
-      playbackRef.current.currentTime = 0;
-      setIsPlaying(false);
-    } else {
-      playbackRef.current.play();
-      setIsPlaying(true);
-    }
-  };
-
-  const closePanel = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (playbackRef.current) { playbackRef.current.pause(); playbackRef.current = null; }
-    setIsPlaying(false);
-    setShowPanel(false);
-    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
-    audioUrlRef.current = null;
-    setAudioUrl(null);
-    setTranscript('');
-  };
+    return () => {
+      playbacksRef.current.forEach(audio => { audio.pause(); audio.onended = null; });
+    };
+  }, []);
 
   const startRecording = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -293,7 +402,6 @@ export default function App() {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
-      // Mic permission denied or not available — silently do nothing
       return;
     }
 
@@ -302,7 +410,6 @@ export default function App() {
     liveTextRef.current = '';
     setLiveText('');
 
-    // ── MediaRecorder: captures audio for playback ──
     const mediaRecorder = new MediaRecorder(stream);
     mediaRecorderRef.current = mediaRecorder;
 
@@ -311,19 +418,16 @@ export default function App() {
     };
     mediaRecorder.onstop = () => {
       const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
       const url = URL.createObjectURL(blob);
-      audioUrlRef.current = url;
-      setAudioUrl(url);
-      // Use the snapshot captured at stop time to avoid race with recognition.onend
-      setTranscript(pendingTranscriptRef.current);
-      setShowPanel(true);
+      const id = Date.now();
+      const audio = new Audio(url);
+      audio.onended = () => setPlayingId(pid => (pid === id ? null : pid));
+      playbacksRef.current.set(id, audio);
+      setRecordings(prev => [...prev, { id, url, transcript: pendingTranscriptRef.current }]);
       stream.getTracks().forEach(t => t.stop());
     };
-    // Delay start so the mic doesn't capture the tap/click sound
     setTimeout(() => mediaRecorder.start(), 200);
 
-    // ── SpeechRecognition: live speech-to-text ──
     const SR = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SR) {
       const recognition = new SR();
@@ -333,8 +437,6 @@ export default function App() {
       recognition.lang = 'en-US';
 
       recognition.onresult = (event: any) => {
-        // event.results only contains results from the current session.
-        // We prefix with accumulatedFinalRef to keep text from previous sessions.
         let sessionFinal = '';
         let interim = '';
         for (let i = 0; i < event.results.length; i++) {
@@ -346,12 +448,10 @@ export default function App() {
         const display = interim ? fullFinal + ' ' + interim : fullFinal;
         liveTextRef.current = display.trim();
         setLiveText(display.trim());
-        // Keep sessionFinal in ref so onend can persist it before restart
         recognition._sessionFinal = sessionFinal.trim();
       };
 
       recognition.onend = () => {
-        // Save this session's finals before potentially restarting
         if (recognition._sessionFinal) {
           accumulatedFinalRef.current = (accumulatedFinalRef.current + ' ' + recognition._sessionFinal).trim();
           recognition._sessionFinal = '';
@@ -374,12 +474,9 @@ export default function App() {
     setIsRecording(false);
     setLiveText('');
 
-    // Snapshot all text we have right now (accumulated finals + current session finals)
-    // before stopping, so onstop doesn't race with recognition.onend
     const rec = recognitionRef.current;
     const sessionFinal = rec?._sessionFinal || '';
     const refsSnapshot = (accumulatedFinalRef.current + ' ' + sessionFinal).trim();
-    // Fall back to liveText (which includes interim results) if refs are empty
     pendingTranscriptRef.current = refsSnapshot || liveTextRef.current;
 
     mediaRecorderRef.current?.stop();
@@ -398,7 +495,8 @@ export default function App() {
   const handleScreenClick = (e: React.MouseEvent) => {
     if (!hasClicked) setHasClicked(true);
     if (isSoundEnabled) playPopSound();
-    if (!isTimerRunning) setIsTimerRunning(true);
+    // Only auto-start the timer if timerEnabled
+    if (timerEnabled && !isTimerRunning) setIsTimerRunning(true);
 
     setWords(prev => [
       ...prev,
@@ -406,15 +504,43 @@ export default function App() {
     ].slice(-maxWords));
   };
 
+  const fiveWords = (text: string) => {
+    if (!text) return '';
+    const ws = text.trim().split(/\s+/).filter(Boolean);
+    if (ws.length <= 5) return text;
+    return ws.slice(0, 5).join(' ') + '\u2026';
+  };
+
   return (
     <div
       className="relative h-screen w-screen cursor-pointer overflow-hidden bg-zinc-50 dark:bg-zinc-950 transition-colors duration-700"
       onClick={handleScreenClick}
     >
-      {/* Top bar — timer left, controls right, same alignment */}
+      {/* Top bar */}
       <div className="absolute top-6 inset-x-6 z-10 flex items-center justify-between pointer-events-none">
-        <div className="pointer-events-auto">
-          <Timer isRunning={isTimerRunning} onReset={() => setIsTimerRunning(false)} />
+        <div className="pointer-events-auto flex items-center gap-2">
+          {/* Timer-enabled dot toggle */}
+          <button
+            onClick={toggleTimerEnabled}
+            className="p-1.5 group"
+            aria-label={timerEnabled ? 'Disable timer' : 'Enable timer'}
+          >
+            <div
+              className={`w-2 h-2 rounded-full transition-all duration-500 ${
+                timerEnabled
+                  ? 'bg-zinc-400/50 dark:bg-zinc-500/50 group-hover:bg-zinc-600 dark:group-hover:bg-zinc-300'
+                  : 'bg-zinc-400/10 dark:bg-zinc-600/10 group-hover:bg-zinc-400/30 dark:group-hover:bg-zinc-500/30'
+              }`}
+            />
+          </button>
+          <Timer
+            resetSignal={timerKey}
+            duration={duration}
+            isRunning={isTimerRunning}
+            onStop={() => setIsTimerRunning(false)}
+            onMinute={handleTimerMinute}
+            onDurationChange={handleDurationChange}
+          />
         </div>
         <div className="flex items-center pointer-events-auto">
           <NumInput
@@ -457,60 +583,73 @@ export default function App() {
         ))}
       </AnimatePresence>
 
-      {/* Live transcript — centered bottom, visible while recording */}
+      {/* Live transcript — no background, just floating text */}
       <AnimatePresence>
         {isRecording && liveText && (
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0, filter: 'blur(4px)' }}
-            transition={{ duration: 0.4 }}
-            className="absolute bottom-20 left-1/2 -translate-x-1/2 max-w-lg text-center text-base text-zinc-400/70 dark:text-zinc-500/60 select-none pointer-events-none px-8"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 8 }}
+            transition={{ duration: 0.3 }}
+            className="absolute bottom-28 left-1/2 -translate-x-1/2 w-[90vw] max-w-sm text-center text-sm leading-relaxed text-zinc-500 dark:text-zinc-400 select-none pointer-events-none px-4"
           >
             {liveText}
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Recording area — unified bottom-right */}
-      <div className="absolute bottom-6 right-6 z-20 flex items-center gap-3" onClick={e => e.stopPropagation()}>
-        {/* Review pill — slides in when panel is visible */}
-        <AnimatePresence>
-          {showPanel && (
-            <motion.div
-              className="flex items-center gap-3 px-4 py-2.5 rounded-full bg-zinc-100/80 dark:bg-zinc-900/80 backdrop-blur-md"
-              initial={{ opacity: 0, x: 20, filter: 'blur(8px)' }}
-              animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
-              exit={{ opacity: 0, x: 20, filter: 'blur(8px)' }}
-              transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-            >
-              <button
-                onClick={togglePlayback}
-                className="text-zinc-400/50 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors duration-500"
-                aria-label={isPlaying ? 'Stop playback' : 'Play recording'}
-              >
-                {isPlaying ? <Square size={16} strokeWidth={1.5} /> : <Play size={16} strokeWidth={1.5} />}
-              </button>
-              <p className="max-w-xs text-xs leading-relaxed text-zinc-500 dark:text-zinc-400 truncate">
-                {transcript || 'No speech detected'}
-              </p>
-              <button
-                onClick={closePanel}
-                className="text-zinc-400/30 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors duration-500"
-                aria-label="Clear transcript"
-              >
-                <Trash2 size={14} strokeWidth={1.5} />
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
+      {/* Recording area — bottom-right: pills row + mic button */}
+      <div
+        className="absolute bottom-6 right-6 z-20 flex items-center gap-2"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Saved recordings — scrollable row, hidden scrollbar */}
+        {recordings.length > 0 && (
+          <div
+            className="flex gap-2 overflow-x-auto scrollbar-none"
+            style={{ maxWidth: 'calc(100vw - 5rem)' }}
+          >
+            <AnimatePresence>
+              {recordings.map(rec => (
+                <motion.div
+                  key={rec.id}
+                  className="flex items-center gap-2 px-3 py-2 rounded-full bg-zinc-100/90 dark:bg-zinc-900/90 backdrop-blur-md shrink-0"
+                  initial={{ opacity: 0, x: 16, filter: 'blur(6px)' }}
+                  animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
+                  exit={{ opacity: 0, x: 16, filter: 'blur(6px)' }}
+                  transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  <button
+                    onClick={togglePlayback(rec.id)}
+                    className="text-zinc-400/60 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors duration-300"
+                    aria-label={playingId === rec.id ? 'Stop playback' : 'Play recording'}
+                  >
+                    {playingId === rec.id
+                      ? <Square size={14} strokeWidth={1.5} />
+                      : <Play size={14} strokeWidth={1.5} />}
+                  </button>
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400 max-w-[8rem] truncate">
+                    {fiveWords(rec.transcript) || 'No speech'}
+                  </span>
+                  <button
+                    onClick={removeRecording(rec.id)}
+                    className="text-zinc-400/30 hover:text-zinc-900 dark:hover:text-zinc-50 transition-colors duration-300"
+                    aria-label="Remove recording"
+                  >
+                    <X size={12} strokeWidth={1.5} />
+                  </button>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
+        )}
 
-        {/* Mic / Stop button — always visible */}
+        {/* Mic / Stop button */}
         <button
           onClick={isRecording ? stopRecording : startRecording}
           className={`rounded-full p-3 transition-all duration-500 ${isRecording
-              ? 'text-zinc-900 dark:text-zinc-50'
-              : 'text-zinc-400/30 hover:text-zinc-900 dark:hover:text-zinc-50'
+            ? 'text-zinc-900 dark:text-zinc-50'
+            : 'text-zinc-400/30 hover:text-zinc-900 dark:hover:text-zinc-50'
             }`}
           aria-label={isRecording ? 'Stop recording' : 'Start recording'}
         >
@@ -523,7 +662,7 @@ export default function App() {
         </button>
       </div>
 
-      {/* Hint — centered, replaces the initial word */}
+      {/* Hint */}
       <AnimatePresence>
         {!hasClicked && (
           <motion.div
