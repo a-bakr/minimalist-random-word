@@ -417,7 +417,8 @@ export default function App() {
       if (ev.data.size > 0) audioChunksRef.current.push(ev.data);
     };
     mediaRecorder.onstop = () => {
-      const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      const mimeType = mediaRecorder.mimeType || 'audio/webm';
+      const blob = new Blob(audioChunksRef.current, { type: mimeType });
       const url = URL.createObjectURL(blob);
       const id = Date.now();
       const audio = new Audio(url);
@@ -451,13 +452,27 @@ export default function App() {
         recognition._sessionFinal = sessionFinal.trim();
       };
 
+      recognition.onerror = (event: any) => {
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          setLiveText('[Microphone permission denied]');
+          isRecordingRef.current = false;
+          setIsRecording(false);
+        }
+        // For 'network', 'aborted', 'audio-capture' etc., let onend handle the restart
+      };
+
       recognition.onend = () => {
         if (recognition._sessionFinal) {
           accumulatedFinalRef.current = (accumulatedFinalRef.current + ' ' + recognition._sessionFinal).trim();
           recognition._sessionFinal = '';
         }
         if (isRecordingRef.current) {
-          try { recognition.start(); } catch { /* already starting */ }
+          // Small delay helps avoid rapid-restart failures on Android Chrome
+          setTimeout(() => {
+            if (isRecordingRef.current) {
+              try { recognition.start(); } catch { /* already starting */ }
+            }
+          }, 150);
         }
       };
 
@@ -472,7 +487,6 @@ export default function App() {
     e.stopPropagation();
     isRecordingRef.current = false;
     setIsRecording(false);
-    setLiveText('');
 
     const rec = recognitionRef.current;
     const sessionFinal = rec?._sessionFinal || '';
@@ -585,13 +599,14 @@ export default function App() {
 
       {/* Live transcript — no background, just floating text */}
       <AnimatePresence>
-        {isRecording && liveText && (
+        {liveText && (
           <motion.div
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 8 }}
             transition={{ duration: 0.3 }}
-            className="absolute bottom-28 left-1/2 -translate-x-1/2 w-[90vw] max-w-sm text-center text-sm leading-relaxed text-zinc-500 dark:text-zinc-400 select-none pointer-events-none px-4"
+            className="absolute bottom-28 left-1/2 -translate-x-1/2 w-[90vw] max-w-sm text-center text-sm leading-relaxed text-zinc-500 dark:text-zinc-400 select-none px-4 cursor-pointer"
+            onClick={e => { e.stopPropagation(); setLiveText(''); }}
           >
             {liveText}
           </motion.div>
