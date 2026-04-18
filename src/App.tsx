@@ -310,6 +310,8 @@ export default function App() {
   const liveTextRef = useRef('');
   const playbacksRef = useRef<Map<number, HTMLAudioElement>>(new Map());
   const recordingCountRef = useRef(0);
+  const mobileGroqIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mobileGroqAbortRef = useRef<AbortController | null>(null);
 
   const isMobile = /Android|iPhone|iPad|iPod|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
@@ -363,6 +365,8 @@ export default function App() {
   useEffect(() => {
     return () => {
       playbacksRef.current.forEach(audio => { audio.pause(); audio.onended = null; });
+      if (mobileGroqIntervalRef.current) clearInterval(mobileGroqIntervalRef.current);
+      mobileGroqAbortRef.current?.abort();
     };
   }, []);
 
@@ -380,6 +384,8 @@ export default function App() {
     accumulatedFinalRef.current = '';
     liveTextRef.current = '';
     setLiveText('');
+    if (mobileGroqIntervalRef.current) clearInterval(mobileGroqIntervalRef.current);
+    mobileGroqAbortRef.current?.abort();
 
     const mediaRecorder = new MediaRecorder(stream);
     mediaRecorderRef.current = mediaRecorder;
@@ -427,7 +433,46 @@ export default function App() {
         }
       }
     };
-    setTimeout(() => mediaRecorder.start(), 200);
+    setTimeout(() => isMobile ? mediaRecorder.start(1000) : mediaRecorder.start(), 200);
+
+    // Mobile: live transcription by sending growing audio blob to Groq every 3 s
+    if (isMobile) {
+      const groqKey = import.meta.env.VITE_GROQ_API_KEY;
+      if (groqKey) {
+        mobileGroqIntervalRef.current = setInterval(async () => {
+          if (!isRecordingRef.current || audioChunksRef.current.length === 0) return;
+          const chunks = [...audioChunksRef.current];
+          const mimeType = mediaRecorder.mimeType || 'audio/webm';
+          const blob = new Blob(chunks, { type: mimeType });
+          if (blob.size < 5000) return; // skip until we have enough audio
+
+          mobileGroqAbortRef.current?.abort();
+          const controller = new AbortController();
+          mobileGroqAbortRef.current = controller;
+
+          const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'mp4' : 'webm';
+          const file = new File([blob], `live.${ext}`, { type: mimeType });
+          const formData = new FormData();
+          formData.append('file', file);
+          formData.append('model', 'whisper-large-v3-turbo');
+          formData.append('response_format', 'json');
+          try {
+            const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${groqKey}` },
+              body: formData,
+              signal: controller.signal,
+            });
+            const data = await res.json();
+            if (data.text && isRecordingRef.current) {
+              liveTextRef.current = data.text.trim();
+              setLiveText(data.text.trim());
+            }
+          } catch { /* ignore abort / network errors */ }
+        }, 3000);
+      }
+    }
+
 
     const SR = !isMobile && ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
     if (SR) {
@@ -480,6 +525,11 @@ export default function App() {
     e.stopPropagation();
     isRecordingRef.current = false;
     setIsRecording(false);
+
+    if (mobileGroqIntervalRef.current) {
+      clearInterval(mobileGroqIntervalRef.current);
+      mobileGroqIntervalRef.current = null;
+    }
 
     const rec = recognitionRef.current;
     const sessionFinal = rec?._sessionFinal || '';
