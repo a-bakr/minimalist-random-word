@@ -28,7 +28,6 @@ export function useVoiceRecognition() {
 
   const mobileRecorderRef = useRef<MediaRecorder | null>(null);
   const mobileChunksRef = useRef<Blob[]>([]);
-  const mobileIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mobileAbortRef = useRef<AbortController | null>(null);
   const isListeningRef = useRef(false);
 
@@ -71,31 +70,14 @@ export function useVoiceRecognition() {
       mr.ondataavailable = e => {
         if (e.data.size > 0) mobileChunksRef.current.push(e.data);
       };
-      mr.start(1000);
+      mr.start();
       isListeningRef.current = true;
-
-      mobileIntervalRef.current = setInterval(async () => {
-        if (!isListeningRef.current || mobileChunksRef.current.length === 0) return;
-        const mimeType = mr.mimeType || 'audio/webm';
-        const blob = new Blob([...mobileChunksRef.current], { type: mimeType });
-        if (blob.size < 5000) return;
-
-        mobileAbortRef.current?.abort();
-        const controller = new AbortController();
-        mobileAbortRef.current = controller;
-        const text = await transcribeBlob(blob, mimeType, controller.signal);
-        if (text && isListeningRef.current) setTranscript(text);
-      }, 3000);
     },
-    [transcribeBlob, setTranscript]
+    []
   );
 
   const stopMobile = useCallback(async () => {
     isListeningRef.current = false;
-    if (mobileIntervalRef.current) {
-      clearInterval(mobileIntervalRef.current);
-      mobileIntervalRef.current = null;
-    }
     mobileAbortRef.current?.abort();
     const mr = mobileRecorderRef.current;
     if (!mr) return;
@@ -203,5 +185,10 @@ export function useVoiceRecognition() {
     return transcriptRef.current;
   }, [stopMobile, setTranscript]);
 
-  return { ...state, start, stop, transcriptRef };
+  const clearTranscript = useCallback(() => {
+    transcriptRef.current = '';
+    setState(s => ({ ...s, transcript: '' }));
+  }, []);
+
+  return { ...state, start, stop, clearTranscript, transcriptRef };
 }

@@ -127,7 +127,7 @@ export default function App() {
         ))}
       </AnimatePresence>
 
-      <TranscriptOverlay text={voice.transcript} onDismiss={() => { }} />
+      <TranscriptOverlay text={voice.transcript} onDismiss={voice.clearTranscript} />
 
       <RecordingArea
         recordings={rec.recordings}
